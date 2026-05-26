@@ -1,0 +1,157 @@
+# Polylith
+
+At a high level: **uv + polylith + hatchling**.
+
+> uv runs everything · Polylith organizes everything · Hatchling ships everything.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  uv             →  Project lifecycle in one ecosystem        │
+│                    install · sync · lock · run · invoke build│
+├──────────────────────────────────────────────────────────────┤
+│  Polylith       →  Architecture pattern (bricks ↔ projects)  │
+│                    workspace.toml + [tool.polylith.bricks]   │
+│                    Two consumers:                            │
+│                      • poly (CLI)    — inspect / scaffold    │
+│                      • hatch-polylith-bricks (plugin) — build│
+├──────────────────────────────────────────────────────────────┤
+│  Hatchling      →  Build backend (source → wheel)            │
+│                    + the polylith plugin copies bricks in    │
+│                    → wheels become self-contained            │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## uv
+
+`pyproject.toml` is what makes a directory a uv directory. Run `uv sync` in it and uv will:
+
+- create `.venv/` (or honor `UV_PROJECT_ENVIRONMENT`)
+- generate `uv.lock`
+- install the project + deps in editable mode
+
+### Three flavors of uv project
+
+**1. Single-package project** — typical app/library
+
+```toml
+[project]
+name = "my-tool"
+version = "0.1.0"
+dependencies = ["requests"]
+```
+
+`uv build` produces a wheel.
+
+**2. Non-package project** — manages a venv + deps but doesn't build a wheel
+
+```toml
+[project]
+name = "my-workspace-root"
+version = "0.0.0"
+
+[tool.uv]
+package = false   # ← this is the key
+```
+
+This is what the Polylith monorepo (and the skeleton) does at the repo root. The root isn't a deployable artifact; it's just there to declare the workspace.
+
+**3. Workspace (monorepo)** — root + members
+
+```toml
+# Root pyproject.toml
+[tool.uv.workspace]
+members = ["projects/greeter", "projects/analyzer"]
+```
+
+Each `members/*/pyproject.toml` is itself a uv project. One shared `uv.lock` at the root; one shared `.venv/`; each member is installed editably.
+
+### What uv is **not**
+
+- uv does **not** require a specific build backend. Hatchling, setuptools, poetry-core, flit — all fine. uv only reads `[project]` and `[tool.uv]`; the build backend reads `[build-system]` and `[tool.hatch.*]`.
+- uv does **not** care about Polylith. The two layers are orthogonal.
+
+---
+
+## Polylith
+
+Concept borrowed from: <https://davidvujic.github.io/python-polylith-docs/>
+
+### What `workspace.toml` contains
+
+```toml
+[tool.polylith]
+namespace = "my_namespace"          # import root: from my_namespace.schemas import X
+git_tag_pattern = "v[0-9]*.[0-9]*.[0-9]*"
+
+[tool.polylith.structure]
+theme = "loose"                     # see below
+
+[tool.polylith.resources]
+brick_docs_enabled = false          # whether `poly` looks for per-brick READMEs
+
+[tool.polylith.test]
+enabled = true                      # whether `poly test` is supported
+```
+
+`workspace.toml` is what makes a project Polylith. It tells `poly` (polylith-cli) and `hatch-polylith-bricks` how to interpret the repo as a Polylith structure.
+
+- **namespace** — the Python top-level import name. All bricks live under `components/<namespace>/` and resolve as `from <namespace>.schemas import X`.
+- **theme** — `loose` keeps bricks one level under the namespace dir (what Torc uses); `tdd` adds an extra nesting layer.
+
+---
+
+## Hatchling
+
+When you see `requires = ["hatchling"]` in `[build-system]`:
+
+Hatchling is a Python build backend — the thing that turns source code into installable wheels and sdists. You never call it directly; it gets invoked behind the scenes by `uv build`, `uv sync`, or `pip install -e .`.
+
+### How it gets invoked
+
+```
+You run:        uv sync     or    uv build     or    pip install -e .
+                   ↓
+The tool reads: pyproject.toml → [build-system] → "hatchling.build"
+                   ↓
+Hatchling:      resolves source dirs, runs plugins, assembles the package
+```
+
+### The config it reads
+
+```toml
+[build-system]
+requires = ["hatchling"]            # declares the backend
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+dev-mode-dirs = ["components", "."]  # editable-install src dirs
+
+[tool.hatch.build.targets.wheel]
+packages = ["greeter", "poly_sandbox"]  # what goes in the wheel
+
+[tool.hatch.build.hooks.polylith-bricks]  # enable the polylith plugin
+```
+
+| Key | What it does |
+|---|---|
+| `dev-mode-dirs` | Adds these dirs to `sys.path` when installed editably (`uv sync`). **This is the magic line** that makes `from poly_sandbox.schemas import X` resolve to `components/poly_sandbox/schemas/` in dev. |
+| `targets.wheel.packages` | Which top-level packages to include in the built wheel |
+| `hooks.<name>` | Activates a plugin (e.g. `polylith-bricks`) |
+
+### The plugin system
+
+`hatch-polylith-bricks` is a hook that runs at build time and copies brick directories from `components/` into the wheel, mapped by:
+
+```toml
+[tool.polylith.bricks]
+"../../components/poly_sandbox/schemas" = "poly_sandbox/schemas"
+```
+
+Without that plugin, your wheel would be missing the bricks.
+
+The plugin is what makes the dual-resolution model work:
+
+1. **Dev** — `components/` on `sys.path` via `dev-mode-dirs`
+2. **Prod** — brick contents copied into the wheel by the plugin
