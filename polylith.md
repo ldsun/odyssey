@@ -155,3 +155,161 @@ The plugin is what makes the dual-resolution model work:
 
 1. **Dev** — `components/` on `sys.path` via `dev-mode-dirs`
 2. **Prod** — brick contents copied into the wheel by the plugin
+
+---
+
+## Bricks
+
+Bricks are regular Python packages with **no `pyproject.toml`**. They aren't independently installable.
+
+- During development, they're importable via `dev-mode-dirs`.
+- During production builds, the `hatch-polylith-bricks` plugin copies them into project wheels.
+
+This dual resolution — source tree in dev, bundled in prod — is the core Polylith mechanism.
+
+---
+
+## Projects
+
+A deployable package with its own `pyproject.toml`, entry point, tests, and Poe tasks. The project-level `pyproject.toml` differs from the root in two key ways:
+
+1. It requires `hatch-polylith-bricks` in its build system (the root doesn't, because the root doesn't ship bricks in a wheel).
+2. It declares `[tool.polylith.bricks]` mappings that tell the build plugin which bricks to include in production wheels.
+
+The `[project.scripts]` section registers a CLI command.
+
+### Minimal example — one brick, one project, one test
+
+```
+my_repo/
+├── pyproject.toml                  workspace root, declares uv workspace
+├── workspace.toml                  namespace = "my_ns"
+│
+├── components/
+│   └── my_ns/
+│       └── schemas/                ← the one brick
+│           ├── __init__.py
+│           └── models.py
+│
+├── projects/
+│   └── my_app/
+│       ├── pyproject.toml          maps schemas brick → wheel; declares script
+│       ├── my_app/                 ← the one project
+│       │   ├── __init__.py
+│       │   ├── main.py             from my_ns.schemas import Message
+│       │   └── core.py
+│       └── tests/
+│           └── test_core.py        ← the one test
+│
+└── tests/
+    └── components/
+        └── my_ns/
+            └── test_schemas.py     (optional — brick tests at root)
+```
+
+### Minimum content of each file
+
+**`workspace.toml`**
+
+```toml
+[tool.polylith]
+namespace = "my_ns"
+
+[tool.polylith.structure]
+theme = "loose"
+```
+
+**Root `pyproject.toml`**
+
+```toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "my-repo"
+version = "0.0.0"
+requires-python = ">=3.11"
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["projects/my_app"]
+
+[tool.hatch.build]
+dev-mode-dirs = ["components", "."]
+```
+
+**`components/my_ns/schemas/models.py`**
+
+```python
+from pydantic import BaseModel
+
+class Message(BaseModel):
+    text: str
+```
+
+**`components/my_ns/schemas/__init__.py`**
+
+```python
+from my_ns.schemas.models import Message
+
+__all__ = ["Message"]
+```
+
+**`projects/my_app/pyproject.toml`**
+
+```toml
+[build-system]
+requires = ["hatchling", "hatch-polylith-bricks"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.hooks.polylith-bricks]
+
+[tool.polylith.bricks]
+"../../components/my_ns/schemas" = "my_ns/schemas"   # brick → wheel
+
+[tool.hatch.build]
+dev-mode-dirs = ["../../components", "."]
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_app", "my_ns"]
+
+[project]
+name = "my-app"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = ["pydantic"]
+
+[project.scripts]
+my-app = "my_app.main:main"
+```
+
+**`projects/my_app/my_app/main.py`**
+
+```python
+from my_ns.schemas import Message
+
+def main() -> None:
+    print(Message(text="hello").text)
+```
+
+**`projects/my_app/tests/test_core.py`**
+
+```python
+from my_ns.schemas import Message
+
+def test_message():
+    assert Message(text="hi").text == "hi"
+```
+
+### The full lifecycle on this one example
+
+```bash
+$ uv sync                         # creates .venv, installs my_app editably,
+                                  # puts components/ on sys.path
+$ uv run my-app                   # runs my_app.main:main → prints "hello"
+$ uv run pytest                   # runs test_core.py
+$ cd projects/my_app && uv build  # produces a wheel containing my_app/ + my_ns/schemas/
+```
