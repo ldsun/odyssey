@@ -1,0 +1,324 @@
+# Odysse — py123d
+
+How py123d fits into an ML pipeline.
+
+## Skeleton
+
+```
+SceneFilter → SceneAPI → PyTorch Dataset → DataLoader → model → train step
+         ↑           ↑
+    logical scenes   frames in a scene
+```
+
+**SceneFilter** operates on **physical data already processed by py123d** (Arrow logs under `PY123D_DATA_ROOT`). It selects which split, logs, and time-window parameters to use, then **constructs logical scenes** — each scene is a fixed time window of frames cut from a log (history + anchor + future).
+
+**SceneAPI** is the **interface to walk through those frames** inside one scene. You call `get_*_at_iteration(i, …)` to read cameras, lidar, boxes, ego, and map at iteration `i` within that window.
+
+| Stage | Role |
+|-------|------|
+| **SceneFilter** | Select processed logs → build logical scenes (time windows) |
+| **SceneAPI** | Read interface for one scene — iterate over frames at `i` |
+| **Your code** | Convert SceneAPI outputs to tensors, batch, train |
+
+**SceneFilter** answers *which scenes to build*. **SceneAPI** answers *how to read each frame in a scene*.
+
+---
+
+## On-disk layout
+
+py123d splits storage into two places:
+
+| Root | Env var | What lives here |
+|------|---------|-----------------|
+| **py123d store** | `PY123D_DATA_ROOT` | Converted Arrow logs — timelines, poses, box tables, *pointers* to heavy sensor files |
+| **Dataset raw store** | dataset-specific (AV2: `AV2_DATA_ROOT`) | Original sensor payloads — JPEG images, lidar files, etc. |
+
+`SceneAPI` reads Arrow tables from the py123d store. When a row stores a **path** (not embedded bytes), py123d resolves it against the dataset raw store at load time.
+
+### py123d store (`PY123D_DATA_ROOT`)
+
+Typically `~/datasets/py123d`:
+
+```
+{PY123D_DATA_ROOT}/
+└── logs/
+    └── {split}/                          # e.g. av2-sensor_val
+        └── {log_uuid}/
+            ├── sync.arrow                # timeline — required for scene discovery
+            ├── ego_state_se3.arrow       # poses, velocity (inline columns)
+            ├── box_detections_se3.arrow  # 3D boxes (inline columns)
+            ├── lidar.lidar_merged.arrow  # timestamp + path or bytes per sweep
+            ├── map.arrow
+            ├── camera.pcam_f0.arrow      # timestamp + path or bytes per frame
+            └── …
+```
+
+- **`sync.arrow`** — master clock; aligns all modalities to iteration indices.
+- **Inline modalities** (ego, boxes) — values live directly in the Arrow columns.
+- **Heavy modalities** (camera, lidar) — each row has a `{modality}.data` column that is either:
+  - a **relative path string** → load file from dataset raw store (common for AV2), or
+  - **embedded bytes** → self-contained in the Arrow file (no external files needed).
+
+Example path stored in `camera.pcam_f0.arrow`:
+
+```
+val/02678d04-…/sensors/cameras/ring_front_center/315969904399927214.jpg
+```
+
+Example path stored in `lidar.lidar_merged.arrow`:
+
+```
+val/02678d04-…/sensors/lidar/315969904359876000.feather
+```
+
+These are **relative to the dataset sensor root**, not absolute paths.
+
+### Dataset raw store (AV2 example: `AV2_DATA_ROOT`)
+
+Typically `~/datasets/av2`. Sensor files sit under `sensor/`:
+
+```
+{AV2_DATA_ROOT}/
+└── sensor/
+    └── {split_type}/                     # e.g. val
+        └── {log_uuid}/
+            ├── sensors/
+            │   ├── cameras/
+            │   │   └── ring_front_center/
+            │   │       └── {timestamp_ns}.jpg
+            │   └── lidar/
+            │       └── {timestamp_ns}.feather
+            ├── calibration/
+            ├── map/
+            └── …                         # other native AV2 files
+```
+
+### How path → artifact resolves at read time
+
+```
+Arrow row:  camera.pcam_f0.data = "val/{uuid}/sensors/cameras/ring_front_center/{ts}.jpg"
+                                              │
+                                              ▼
+Resolved:   {AV2_DATA_ROOT}/sensor/ + relative path
+            → ~/datasets/av2/sensor/val/{uuid}/sensors/cameras/ring_front_center/{ts}.jpg
+```
+
+Set `AV2_DATA_ROOT` (or the matching env var for your dataset) before calling `SceneAPI` getters — otherwise path-based camera/lidar rows cannot be loaded.
+
+```python
+import os
+from pathlib import Path
+
+os.environ["PY123D_DATA_ROOT"] = str(Path("~/datasets/py123d").expanduser())
+os.environ["AV2_DATA_ROOT"]    = str(Path("~/datasets/av2").expanduser())
+```
+
+---
+
+## Split, log, scene, iteration
+
+Hierarchy (provider → py123d → your training sample):
+
+```
+split          provider-defined partition (train / val / test)
+ └── log       provider-defined recording (one UUID, full duration)
+      └── scene     py123d time window cut from a log (SceneFilter + SceneAPI)
+           └── iteration   one time step i within that scene
+```
+
+### Split
+
+A **split** is a named partition of a dataset — which logs belong to train, validation, or test.
+
+**Who defines it:** the dataset provider (Argoverse 2, nuScenes, …). Each benchmark publishes official split assignments — e.g. which log UUIDs are in AV2 val vs train. py123d does not re-partition data; conversion reads the provider's split and writes logs under a matching folder name.
+
+**Naming in py123d:** `{dataset}_{split_type}` — dataset variant + provider split type:
+
+| Example | Provider | Split type |
+|---------|----------|--------------|
+| `av2-sensor_val` | Argoverse 2 Sensor | validation |
+| `av2-sensor_train` | Argoverse 2 Sensor | training |
+| `nuscenes_train` | nuScenes | training |
+| `nuscenes_val` | nuScenes | validation |
+
+On disk: `{PY123D_DATA_ROOT}/logs/{split_name}/`.  
+In code: `SceneFilter(split_names=["av2-sensor_val"])` — you **select** a split; you don't define which logs it contains (that was fixed at conversion from the provider's list).
+
+### Log
+
+A **log** is one continuous driving recording — a single sequence with a provider-assigned ID (UUID).
+
+**Who defines it:** the dataset provider. AV2, nuScenes, etc. each publish a set of logs; each log is one drive/scene with a fixed UUID, duration, and sensor data. py123d converts **one provider log → one directory** under the split — it does not merge, split, or invent new logs.
+
+| Example | Provider | What it is |
+|---------|----------|------------|
+| `02678d04-cc9f-3148-9f95-1ba66347dff9` | AV2 Sensor | One ~15 s recording, all cameras + lidar for that drive |
+| nuScenes `scene-0061` (stored as a log name) | nuScenes | One 20 s keyframe sequence |
+
+On disk: `{PY123D_DATA_ROOT}/logs/{split}/{log_uuid}/`.  
+In code: `SceneFilter(log_names=[log_uuid])` — optional filter to load specific logs; omit it to load all logs in the split.
+
+A log is the **storage unit** for converted Arrow files. You rarely read raw Arrow yourself — `SceneAPI` does that.
+
+### Scene
+
+A **scene** is a **time window** cut from a log — the unit py123d hands you as one `SceneAPI` object.
+
+**Who defines it:** you (via `SceneFilter`), applied by py123d at load time. A log may be ~15 s long; a scene might be 1 s of history + 3 s of future around one anchor frame. The same log can produce **many scenes** — sliding windows with different anchors.
+
+| Concept | Scope |
+|---------|--------|
+| **Log** | Entire provider recording (all timestamps on disk) |
+| **Scene** | Sub-range of that log, aligned for one ML sample or prediction task |
+| **SceneAPI** | The read handle for one scene — call `get_*_at_iteration(i)` on it |
+
+`get_filtered_scenes(...)` returns `List[SceneAPI]` — **one entry per scene**, not one per log.
+
+```
+one log (15 s)
+├── scene 0   anchor at t=1.0 s   → SceneAPI  scenes[0]
+├── scene 1   anchor at t=4.0 s   → SceneAPI  scenes[1]
+└── scene 2   anchor at t=7.0 s   → SceneAPI  scenes[2]
+```
+
+Scene shape comes from `SceneFilter`:
+
+| Field | Role |
+|-------|------|
+| `history_duration_s` | How much past context before the anchor |
+| `future_duration_s` | How much future after the anchor |
+| `target_iteration_duration_s` | Step size between iterations (e.g. `0.1` → ~10 Hz) |
+
+Each scene carries `SceneMetadata`: `num_history_iterations`, `num_future_iterations`, `total_iterations`, and the anchor UUID/index into the log.
+
+Example for `history=1 s`, `future=3 s`, `step=0.1 s`:
+
+```
+num_history_iterations=10   num_future_iterations=30   total_iterations=41
+```
+
+Scenes are **not** separate folders on disk — they are views constructed from a log's `sync.arrow` + modality tables when you call `get_filtered_scenes`.
+
+### Iteration
+
+An **iteration** is one logical time step **inside a scene** — the index `i` passed to `get_*_at_iteration(i, …)` on a `SceneAPI`.
+
+```
+…  i=-2   i=-1   i=0   i=+1   i=+2  …
+      └─ history ─┘  current  └─ future ─┘
+         (within this scene's window)
+```
+
+- **`i = 0`** — the *current* frame (the scene anchor).
+- **`i < 0`** — history iterations (past context within the scene).
+- **`i > 0`** — future iterations (prediction horizon within the scene).
+
+Iterations are **relative to the scene**, not the whole log. The same physical timestamp can appear as different `i` values in different scenes cut from the same log.
+
+For the example scene above: iteration `i` ranges from **−10 to +30** (41 steps total); `i=0` is the anchor frame.
+
+---
+
+## SceneFilter → SceneAPI
+
+```python
+from pathlib import Path
+import os
+
+from py123d.api import SceneFilter, get_filtered_scenes
+from py123d.common.execution.sequential_executor import SequentialExecutor
+
+PY123D_DATA_ROOT = Path("~/datasets/py123d").expanduser()
+AV2_DATA_ROOT    = Path("~/datasets/av2").expanduser()
+os.environ["PY123D_DATA_ROOT"] = str(PY123D_DATA_ROOT)
+os.environ["AV2_DATA_ROOT"]    = str(AV2_DATA_ROOT)
+
+SPLIT    = "av2-sensor_val"
+LOG_UUID = "02678d04-cc9f-3148-9f95-1ba66347dff9"
+
+scene_filter = SceneFilter(
+    split_names=[SPLIT],
+    log_names=[LOG_UUID],
+    future_duration_s=3.0,
+    history_duration_s=1.0,
+    target_iteration_duration_s=0.1,
+)
+scenes = get_filtered_scenes(
+    scene_filter, data_root=PY123D_DATA_ROOT, executor=SequentialExecutor()
+)
+scene = scenes[0]  # SceneAPI — one time window from the log
+```
+
+What each argument does:
+
+| Argument | Selects |
+|----------|---------|
+| `split_names` | Which partition under `logs/` |
+| `log_names` | Which UUID directories within that split |
+| `history_duration_s` / `future_duration_s` | Scene time window around `i=0` |
+| `target_iteration_duration_s` | Iteration step size (~10 Hz here) |
+| `data_root` | Root containing `logs/` (and optionally `maps/`) |
+| `executor` | Parallelism for multi-log loading; `SequentialExecutor()` for notebooks |
+
+Then read modalities at any iteration:
+
+```python
+from py123d.datatypes import CameraID, LidarID
+
+lidar = scene.get_lidar_at_iteration(0, LidarID.LIDAR_MERGED)
+boxes = scene.get_box_detections_se3_at_iteration(0)
+cam   = scene.get_camera_at_iteration(0, CameraID.PCAM_F0)
+ego   = scene.get_ego_state_se3_at_iteration(0)
+```
+
+After `get_filtered_scenes`, everything goes through **SceneAPI** getters — dataset-specific storage (AV2, nuScenes, …) is already unified behind that interface.
+
+---
+
+## SceneDataset → DataLoader
+
+Everything after `SceneAPI` is standard PyTorch. py123d stops at typed objects; you wrap them in a **`torch.utils.data.Dataset`**.
+
+```
+SceneAPI  →  SceneDataset (torch Dataset)  →  DataLoader  →  model  →  train step
+```
+
+1. **`SceneDataset`** — subclass `Dataset`. Hold one `SceneAPI` (one scene). In `__getitem__(idx)`, map `idx` → iteration `i`, call `scene.get_*_at_iteration(i)`, return tensors (and your target).
+2. **`DataLoader`** — wrap `SceneDataset` for batching and shuffling.
+
+That is the full py123d → ML handoff. Model, loss, and optimizer are yours.
+
+Toy example (one scene, lidar → box count — meaningless task, shows wiring only):
+
+```python
+import torch
+from torch.utils.data import Dataset, DataLoader
+from py123d.datatypes import LidarID
+
+class SceneDataset(Dataset):
+    def __init__(self, scene, num_points: int = 2048):
+        self.scene = scene
+        meta = scene.get_scene_metadata()
+        self.hist = meta.num_history_iterations
+        self.n = meta.total_iterations
+        self.num_points = num_points
+
+    def __len__(self):
+        return self.n
+
+    def __getitem__(self, idx):
+        i = idx - self.hist  # idx at hist → iteration i=0 (anchor)
+        lidar = self.scene.get_lidar_at_iteration(i, LidarID.LIDAR_MERGED)
+        boxes = self.scene.get_box_detections_se3_at_iteration(i)
+        pts = torch.zeros(self.num_points, 3)
+        if lidar is not None and len(lidar.point_cloud_3d):
+            k = min(len(lidar.point_cloud_3d), self.num_points)
+            pts[:k] = torch.as_tensor(lidar.point_cloud_3d[:k], dtype=torch.float32)
+        target = float(len(boxes.box_detections) if boxes else 0)
+        return {"points": pts, "target": torch.tensor(target)}
+
+dataset = SceneDataset(scene)
+loader = DataLoader(dataset, batch_size=2, shuffle=True, num_workers=0)
+```
+
+Use `num_workers=0` when the dataset holds a live `SceneAPI` (open file handles). For multi-scene training, build one `SceneDataset` per scene or flatten many scenes into one dataset — that part is your design choice, not py123d.
