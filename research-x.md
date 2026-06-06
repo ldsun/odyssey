@@ -1,6 +1,6 @@
 # research-x
 
-Knowledge layer for research. Papers live in Zotero; deep notes live here.
+Research reading system. Papers live in Zotero; this repo documents the system.
 
 ## Three-Pass Reading System
 
@@ -73,34 +73,6 @@ Zotero app (must be running on Mac Mini)
 |---|---|
 | Search, read metadata, read full PDF | Local mode (no key needed) |
 | Write notes, apply tags, manage collections | API key (hybrid mode) |
-
----
-
-## research-x Structure
-
-```
-research-x/
-  README.md
-  inbox.md              ← raw reading notes → processed by /process
-  notes/
-    papers/             ← one .md per paper (pass-2 deep notes)
-    topics/             ← synthesis across papers
-```
-
-### Per-paper note (`notes/papers/`) — pass 2 output
-
-- Problem the paper solves
-- Key contributions
-- Methods / approach in detail
-- Key results / numbers
-- Questions / follow-ups
-- Connections to other papers
-
-### Topic note (`notes/topics/`)
-
-- Synthesis across papers on a theme
-- What do I believe?
-- Open questions
 
 ---
 
