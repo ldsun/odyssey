@@ -78,6 +78,32 @@ A common pattern is to have one connection for real users and a separate isolate
 
 ---
 
+## Resource Server (API)
+
+**What it is:** Your backend API, registered with Auth0 so that tokens can be issued for it. The key field is the **identifier** — a string (usually a URL) that becomes the `aud` (audience) claim in the JWT.
+
+**Mental model:** There are three parties in every OAuth flow:
+
+| Party | Role | Example |
+|---|---|---|
+| **Authorization Server** | Issues tokens | Auth0 |
+| **Client** | Requests tokens | Your frontend app |
+| **Resource Server** | Receives and validates tokens | Your backend API |
+
+The Resource Server registration is how you tell Auth0 that your backend exists. Without it, Auth0 doesn't know what to put in the `aud` claim and won't issue a proper JWT.
+
+**How the audience ties them together:**
+
+1. The frontend requests a token for a specific audience (e.g. `https://api.example.com`)
+2. Auth0 checks: is that audience registered? Yes → issues a JWT with `"aud": "https://api.example.com"`
+3. The backend receives the token and validates: does `aud` match what I expect? Yes → accept the request
+
+**What the registration does NOT do** — it doesn't configure your backend. It is purely an Auth0-side declaration that a resource server exists at this identifier and applications are allowed to request tokens for it.
+
+**RS256 and the JWKS endpoint** — tokens are signed with Auth0's private key (RS256). The backend verifies the signature using Auth0's public key, fetched from the JWKS endpoint (`/.well-known/jwks.json`). The backend never shares a secret with Auth0 — it just fetches the public key and checks the signature. This means even if someone steals a token, they cannot forge a new one without Auth0's private key.
+
+---
+
 ## How the pieces fit together
 
 ```
