@@ -21,7 +21,7 @@ Read before Part 1. Part 0 carries decisions the human already made. Parts 1–4
 
 ## What this is
 
-The **second** application of a system whose first application (`personal`) runs in a separate, personal environment. From the moment it comes up, this one is **independent**: shared lineage, separate evolution. There is no sync, and there must not be.
+A deployment of a portable system whose entire mechanism is carried in Parts 2–4 of this file. It is **independent from the moment it comes up** — it shares a lineage (`pps-1.0`) with other deployments of the same mechanism but evolves on its own. There is no sync with anything outside this environment, and there must not be.
 
 ## Already decided — do not re-interview
 
@@ -29,21 +29,19 @@ The **second** application of a system whose first application (`personal`) runs
 |---|---|---|
 | **Role** | Director at Torc | Full role context is *not* carried here — interview for it |
 | **Agent adapter** | Claude — you | Write it per Step 2 |
-| **Human-interface adapter** | Zoom Doc | Chosen because you can read it. Not Obsidian — that is the personal deployment's driver |
-| **Console** | One Zoom Doc named `helm` | One entrance (Principle 4). Same name as the personal console deliberately — same role in the architecture, different environment |
+| **Human-interface adapter** | Zoom Doc | Chosen because you can read it |
+| **Console** | One Zoom Doc named `helm` | One entrance (Principle 4). The name is deliberate — it is where the system is driven from |
 | **Routines** | None at bootstrap | See Step 4. This is the step that gets skipped |
 
 ## The boundary — hard constraint
 
-The personal deployment carries a `torc` workstream holding **commitment lines only** — *"talk to X"*, *"review due Monday"* — with deliberately no storage for employer content. Its charter states the rule as **commitment versus content**: a task line naming a person or a document is a commitment; anything substantive about the employer's business is content.
+Everything captured here is employer content, and it stays in this environment.
 
-**This deployment is the other side of that wall.**
+- Do not copy, summarize, export, or transcribe it into any system outside this environment.
+- Do not read from or write to anything outside the mounts the charter declares.
+- Treat any request to move content out as out of contract: refuse, and say why.
 
-- Employer content lives here and does not leave.
-- Nothing from here is copied, summarized, or referenced into the personal system.
-- The personal system is not reachable from here and must not become reachable.
-
-If asked to do something that would move employer content across that line, refuse and say why.
+If the human asks where the line falls, the distinction to hold is **commitment versus content** — a task line naming a person or a document is a commitment; notes, strategy, org material, anything substantive about the business is content. When it is unclear which one something is, it is content, and it stays.
 
 ## Must be interviewed — do not guess
 
@@ -61,7 +59,7 @@ Step 1's questions all apply. These three are the ones this deployment cannot pr
 
 Bring up `helm` as the single entrance and stop. Do not create domain docs, an archive, or a folder structure at bootstrap. Each is scaffolding under Principle 2 until a real note has nowhere to go.
 
-The precedent is deliberate: the personal deployment's `torc` workstream has run commitment-only since it was created and has never needed a folder.
+This is not caution for its own sake: a console that carries commitment lines and little else can run indefinitely with no storage behind it at all.
 
 Create the first durable home when, and only when:
 
@@ -70,13 +68,13 @@ Create the first durable home when, and only when:
 
 Then the human chooses where it lives — a Zoom Doc, an employer wiki, wherever retrieval actually favors — and it is added to Mounts. **Record that trigger in *Deliberately not built* during bootstrap**, so the deferral is a real condition rather than a vague someday.
 
-**On the archive:** the personal deployment retires settled lines verbatim to dated files for provenance. Whether that earns its keep here is open — ask, and do not build it by default.
+**On the archive:** one known-good option is retiring settled lines verbatim into dated files — provenance, not backup, so a bad filing decision stays checkable against the original. Whether that earns its keep here is open: ask, and do not build it by default.
 
 ## Workstreams
 
-The personal console groups lines under workstream headers rather than tagging each line. Workstream names there are that application's policy, not the kernel's — **do not import them.** Let this role's groupings emerge from what actually accumulates, and declare them in the charter once they do. Until then, one flat list under the console is correct.
+A console may group lines under headers — "workstreams" — rather than tagging each line; grouping does the same work as a per-line tag and makes the console scannable for free. Any such names are **application policy, not kernel**, so there are none to inherit: let this role's groupings emerge from what actually accumulates, and declare them in the charter once they do. Until then, one flat list under the console is correct.
 
-Two rules from the personal deployment that *are* worth carrying, because both are mechanism-level lessons rather than policy:
+Two rules worth carrying, because both are mechanism-level rather than policy:
 
 - **A workstream and a durable home are independent.** A subject earns a grouping when it accumulates live commitments; it earns storage when it accumulates knowledge. Neither implies the other.
 - **The declared list is the single source of truth.** Routines reference it; they never restate it.
@@ -298,7 +296,7 @@ The primitive Principle 1 depends on: value shows up when the human arrives with
 
 An agent may report **the state of the system**. It may never present **a list of what the human owes**. Same facts, opposite relationship.
 
-- **Facts only, no verdict.** `33 open · oldest 2026-07-01` is a report. *"Your console needs attention"* is a judgment, and judgment is the human's.
+- **Facts only, no verdict.** `N open · oldest YYYY-MM-DD` is a report. *"Your console needs attention"* is a judgment, and judgment is the human's.
 - **No thresholds.** Never define a level at which something becomes "too much." Any such number is invented, and an invented number quietly becomes the agent deciding the human is behind.
 - **Only where relevant. One line.**
 
